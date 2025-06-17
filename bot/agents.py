@@ -8,12 +8,13 @@ import random
 from typing import Optional
 
 from bot.jira_tool_client import JiraTool
-from bot.confluence_tool import ConfluenceTool
+from bot.confluence_tool import ConfluenceTool # Ensure this is imported
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import initialize_agent, Tool
 from langchain.memory import ConversationBufferMemory
 from langchain_community.cache import InMemoryCache
 from langchain.globals import set_llm_cache
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage # Import for explicit message types
 
 # Set API key securely (should already be set in env)
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
@@ -25,23 +26,23 @@ set_llm_cache(InMemoryCache())
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.4)
 
 # Memory setup
+# Initialize with a system message to set the agent's persona and instructions
 memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-tools_context = (
-    "Available tools:\n",
-    "- JiraTool: Get ticket and sprint progress\n",
-    "- ConfluenceTool: Lookup internal documentation\n"
-)
-system_context = (
-    "You are a helpful assistant for a software development team. \n"
+
+# Directly add the system context to the memory as a SystemMessage
+memory.chat_memory.add_message(SystemMessage(
+    content="You are a helpful assistant for a software development team. \n"
     "You summarize Jira ticket statuses and match Confluence docs to JIRA issues. \n"
     "You expose any blockers that are reported in Jira.\n"
     "When requested, you retrieve all Jira tickets for the following:\n"
     "- Identity team: Project name = ID\n"
     "- Wallet team: Project name = WL\n"
     "- Messaging team: Project name = MS"
-)
-memory.chat_memory.add_ai_message(system_context)
-memory.chat_memory.add_ai_message(tools_context)
+))
+
+# You can also add tool context directly, or let the agent handle tool descriptions
+# For clarity, let's include tools as part of the overall agent setup,
+# the agent type "chat-conversational-react-description" typically handles tool descriptions well.
 
 # Initialize tools
 jira_tool = JiraTool()
@@ -51,14 +52,13 @@ tools = [
     Tool(
         name="JiraTool",
         func=jira_tool.fetch_jira_issues,
-        description="Useful for fetching Jira ticket information and progress",
+        description="Useful for fetching Jira ticket information and progress. Provide JQL query as input.",
     ),
-    # Uncomment and implement if ConfluenceTool functionality is ready
-    # Tool(
-    #     name="ConfluenceTool",
-    #     func=confluence_tool.some_function,
-    #     description="Useful for fetching Confluence documentation",
-    # )
+    Tool( # UNCOMMENTED AND INTEGRATED
+        name="ConfluenceTool",
+        func=confluence_tool.run, # Use the 'run' method of ConfluenceTool
+        description="Useful for fetching Confluence documentation. Input should be a search query string.",
+    )
 ]
 
 # Agent setup
@@ -68,6 +68,7 @@ agent = initialize_agent(
     agent="chat-conversational-react-description",
     memory=memory,
     verbose=True,
+    # agent_kwargs={"system_message": system_context} # This could also be an option for different agent types
 )
 
 # Valid project keys
@@ -83,29 +84,35 @@ def extract_project_from_prompt(prompt: str) -> Optional[str]:
 
 def summarize_jira_issues(jira_issues: list, project_key: str) -> str:
     # Filter issues that belong to the given project
-    filtered = [issue for issue in jira_issues if issue["key"] == project_key]
+    # Note: The original code filtered by issue["key"] == project_key, which seems to imply
+    # filtering by a single issue key rather than project key.
+    # Assuming project_key refers to the project abbreviation (ID, WL, MS),
+    # we should check if issue["key"] (e.g., "ID-123") starts with the project_key.
+    filtered = [issue for issue in jira_issues if issue["key"].startswith(project_key + "-")] # Adjusted filter
+
     count = len(filtered)
 
     # Define how you identify blockers
-    # Example: assume "blocker" is a label
-    blockers = [i for i in filtered if 'blocker' in getattr(i, 'labels', [])]
+    # Example: assume "blocker" is in summary or description for simplicity if no labels field.
+    # If Jira API provides labels, use issue.fields.labels
+    blockers = [i for i in filtered if 'blocker' in (i.get('summary', '').lower() + i.get('description', '').lower())]
 
     summary = (
-        f"Project {project_key} has {count} tickets created in last 30 days.\n"
-        f"{len(blockers)} blockers reported.\n"
+        f"Project {project_key} has {count} tickets currently fetched.\n" # Changed to reflect fetched, not last 30 days based on JQL
+        f"{len(blockers)} potential blockers identified (based on keywords).\n"
         "Statuses:\n"
     )
 
     # Count statuses
     status_counts = {}
     for issue in filtered:
-        status = issue.status.name
+        status = issue.get("status", "Unknown") # Use .get for safety
         status_counts[status] = status_counts.get(status, 0) + 1
 
     for status, cnt in status_counts.items():
         summary += f"- {status}: {cnt}\n"
 
-    print(f"sUMMARIZED JIRA {filtered}", flush=True)
+    print(f"SUMMARIZED JIRA for {project_key}: {summary}", flush=True) # Debug print for summary
     return summary
 
 async def call_agent_with_retries(agent, prompt, max_attempts=5):
@@ -126,28 +133,45 @@ async def call_agent_with_retries(agent, prompt, max_attempts=5):
 
 async def ask_ai_agent(prompt: str, user_id: str) -> str:
     project_key = extract_project_from_prompt(prompt)
-    print(f"[DEBUG] AI agent warming up {project_key}", flush=True)
+    print(f"[DEBUG] AI agent warming up for project: {project_key}", flush=True)
 
     if not project_key:
         return "No project found in your question. Please specify a valid project (ID, WL, MS)."
 
-    jql_query = f'project IN ("identity team", TRIAGE)'
-    print(f"Fetching jira issues", flush=True)
+    # Adjust JQL query based on the detected project_key for targeted fetching
+    # The original JQL was 'project IN ("identity team", TRIAGE)'
+    # We should refine this based on the extracted project_key for relevance.
+    # For a general overview, it might still fetch broadly, but the summary will filter.
+    # Let's assume the JQL needs to be dynamic for the project.
+    # Mapping project keys to full project names for JQL
+    project_name_map = {
+        "ID": "identity team",
+        "WL": "wallet team",
+        "MS": "messaging team"
+    }
+    jql_project_name = project_name_map.get(project_key, "identity team") # Default to identity team if not found
+
+    # Fetching issues for the specific project identified
+    jql_query = f'project = "{jql_project_name}"' # Adjusted JQL to be specific
+    print(f"Fetching Jira issues with JQL: {jql_query}", flush=True)
 
     try:
         jira_issues = jira_tool.fetch_jira_issues(jql_query)
-        print(f"[DEBUG] Retrieved {len(jira_issues)} issues from Jira", flush=True)
+        print(f"[DEBUG] Retrieved {len(jira_issues)} issues from Jira for {jql_project_name}", flush=True)
         jira_summary = summarize_jira_issues(jira_issues, project_key)
     except Exception as e:
         print(f"[ERROR] Jira fetch failed: {repr(e)}", flush=True)
         return f"Failed to fetch Jira issues: {e}"
 
+    # IMPORTANT FIX: Use jira_summary, not raw jira_issues, in the prompt
     full_prompt = (
-        f"User asked:\n{prompt}\n\n",
-        f"Here is a summary of recent Jira tickets:\n{jira_issues}"
+        f"User asked:\n{prompt}\n\n"
+        f"Here is a summary of recent Jira tickets for {project_key}:\n{jira_summary}\n\n"
+        f"Please answer the user's question using this information and your available tools."
     )
 
-    print(f"[INFO] Prompt token estimate: {len(full_prompt) * 1.2:.0f} tokens", flush=True)
+    print(f"[INFO] Prompt content for agent:\n{full_prompt}", flush=True)
+    print(f"[INFO] Prompt token estimate: {len(full_prompt) / 4:.0f} tokens (rough estimate)", flush=True) # More accurate rough estimate
 
     try:
         response = await call_agent_with_retries(agent, full_prompt)

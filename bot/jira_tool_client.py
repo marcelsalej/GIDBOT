@@ -18,6 +18,7 @@ class JiraTool:
     def fetch_jira_issues(self, jql: str, max_results: int = 50, retries: int = 3) -> List[dict]:
         """
         Fetch Jira issues with pagination, retry on rate limits.
+        Now fetches all available fields.
 
         Args:
             jql (str): JQL query string.
@@ -25,9 +26,9 @@ class JiraTool:
             retries (int): Number of retries on rate limit.
 
         Returns:
-            List of Jira issues (as dicts with URL).
+            List of Jira issues (as dicts with URL and raw data).
         """
-        import random, time  # in case these aren't already imported
+        import random, time
         all_issues = []
         start_at = 0
 
@@ -40,9 +41,9 @@ class JiraTool:
                         jql_str=jql,
                         startAt=start_at,
                         maxResults=max_results,
-                        fields="summary,status,assignee,description"
+                        fields="*all" # Changed to fetch all available fields
                     )
-                    break  # break retry loop on success
+                    break
                 except Exception as e:
                     if "429" in str(e):
                         wait_time = 2 ** attempt + random.uniform(0, 1)
@@ -55,7 +56,7 @@ class JiraTool:
             if attempt == retries:
                 raise Exception("Exceeded Jira API rate limit retries")
 
-            if not issues:  # 🛑 Exit loop when no more issues
+            if not issues:
                 break
 
             for issue in issues:
@@ -65,7 +66,9 @@ class JiraTool:
                     "status": issue.fields.status.name,
                     "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "unassigned",
                     "description": issue.fields.description,
-                    "url": f"{self.base_url}/browse/{issue.id}"
+                    "url": f"{self.base_url}/browse/{issue.id}",
+                    "updated": issue.fields.updated,
+                    "raw_data": issue.raw # Include the full raw issue data for comprehensive access
                 }
                 all_issues.append(issue_data)
 

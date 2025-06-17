@@ -1,13 +1,13 @@
 fastapi
 uvicorn
 slack_sdk
-langchain
 google-generativeai
 requests
 dotenv
 aiohttp
 jira
 atlassian-python-api
-langchain
+langchain>=0.0.272
 langchain-google-genai
 langchain-community
+chromadb

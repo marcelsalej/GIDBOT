@@ -1,21 +1,26 @@
+# bot/main.py
+
 """
 Slack Event Listener for AI Dev Bot
 - Listens to mentions in Slack
 - Sends prompts to the LangChain-based agent
 - Replies with AI-generated answers
 """
-
+import os
+import asyncio
+import logging
+import re
 from fastapi import FastAPI, Request, HTTPException
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.signature import SignatureVerifier
-import os
-import asyncio # New: For running tasks in the background
-import logging # New: For logging events and errors
-import re # New: For more robust prompt cleaning
+from slack_sdk.errors import SlackApiError # Import SlackApiError for specific error handling
 
-# Assuming 'bot.agents' exists and 'ask_ai_agent' is an async function
-# You might need to ensure ask_ai_agent is robust and handles its own errors
-from bot.agents import ask_ai_agent
+# New imports for Jira preloading
+from bot.jira_tool_client import JiraTool
+from bot.vector_store import index_jira_issues
+
+# Use bot.rag_agent for RAG capabilities as it's currently aliased and used.
+from bot.rag_agent import ask_ai_rag as ask_ai_agent
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -30,7 +35,6 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 # Validate environment variables early
 if not SLACK_SIGNING_SECRET:
     logger.error("SLACK_SIGNING_SECRET environment variable not set.")
-    # In a production app, you might want to raise an error or exit
 if not SLACK_BOT_TOKEN:
     logger.error("SLACK_BOT_TOKEN environment variable not set.")
 
@@ -38,6 +42,37 @@ if not SLACK_BOT_TOKEN:
 # --- Slack Clients ---
 client = AsyncWebClient(token=SLACK_BOT_TOKEN)
 signature_verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
+
+# Global variable to store bot_user_id and JiraTool instance
+bot_user_id = None
+jira_tool_instance = None
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    On startup, fetch the bot's user ID and preload/index Jira data.
+    """
+    global bot_user_id
+    global jira_tool_instance
+
+    try:
+        auth_test_response = await client.auth_test()
+        bot_user_id = auth_test_response["user_id"]
+        logger.info(f"Bot user ID fetched successfully: {bot_user_id}")
+    except Exception as e:
+        logger.error(f"Failed to fetch bot user ID during startup: {e}", exc_info=True)
+
+    # --- Jira Preloading ---
+    try:
+        jira_tool_instance = JiraTool()
+        jql_query = 'project IN (TRIAGE, "ID", "WL", "MS")'
+        logger.info("[STARTUP] Fetching Jira issues for preloading...")
+        jira_issues = jira_tool_instance.fetch_jira_issues(jql_query)
+        logger.info(f"[STARTUP] Indexing {len(jira_issues)} Jira issues...")
+        index_jira_issues(jira_issues)
+        logger.info("[STARTUP] Jira issues preloaded and indexed successfully.")
+    except Exception as e:
+        logger.error(f"[STARTUP] Failed to preload/index Jira issues: {e}", exc_info=True)
 
 # --- Helper Function for Background Processing ---
 async def process_app_mention_event(event: dict):
@@ -51,17 +86,16 @@ async def process_app_mention_event(event: dict):
     # Determine the thread to reply to
     thread_ts = event.get("thread_ts", event["ts"])
 
-    bot_id = event.get("bot_id") # Get the bot_id from the event itself if available
+    # Get the bot_id from the event first, or use the globally stored one
+    current_bot_id = event.get("bot_id", bot_user_id)
 
     logger.info(f"Received event from user {user_id} in channel {channel_id}: '{text}'")
 
     # Clean prompt: Remove bot mention (e.g., <@U123ABC>)
-    # This part needs to be smart: if it's a DM, there's no mention to remove.
     prompt = text
-    if bot_id and f"<@{bot_id}>" in prompt: # Only remove if it's a mention and bot_id is in text
-        prompt = prompt.replace(f"<@{bot_id}>", "").strip()
+    if current_bot_id and f"<@{current_bot_id}>" in prompt:
+        prompt = prompt.replace(f"<@{current_bot_id}>", "").strip()
     else:
-        # Fallback for app_mention if bot_id wasn't immediately found or general cleanup
         # This regex targets any user/bot mention tag
         prompt = re.sub(r'<@[A-Z0-9]+>', '', prompt).strip()
 
@@ -88,26 +122,58 @@ async def process_app_mention_event(event: dict):
         logger.info(f"Posted thinking message with ts: {thinking_message_ts} and prompt {prompt}")
 
         # Ask Gemini/AI agent
-
-        
+        ai_response = ""
         try:
-            ai_response = await asyncio.wait_for(ask_ai_agent(prompt, user_id=user_id), timeout=60)
+            ai_response = await asyncio.wait_for(ask_ai_agent(prompt, user_id=user_id), timeout=120)
         except asyncio.TimeoutError:
             logger.error("AI agent timed out.")
             ai_response = "⚠️ Sorry, I'm taking too long to think. Try again in a bit."
         except Exception as e:
-            logger.exception("Error from AI agent.")
+            logger.exception(f"Error from AI agent: {e}")
             ai_response = f"⚠️ Oops, something went wrong: `{e}`"
 
         # Update or delete the "thinking" message and post the final response
         if thinking_message_ts:
-            await client.chat_update(
-                channel=channel_id,
-                ts=thinking_message_ts,
-                text=ai_response
-            )
-            logger.info(f"Updated thinking message {thinking_message_ts} with AI response.")
+            try:
+                update_response = await client.chat_update(
+                    channel=channel_id,
+                    ts=thinking_message_ts,
+                    text=ai_response
+                )
+                # Check for 'ok: false' in the Slack API response despite 200 status
+                if not update_response.get("ok"):
+                    error_slack_api = update_response.get("error", "Unknown Slack API error")
+                    logger.error(f"Slack chat.update failed (ok: false): {error_slack_api} for channel {channel_id}, ts {thinking_message_ts}")
+                    # Fallback: post a new message if update fails
+                    await client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=f"⚠️ Failed to update previous message. Here's the full response: {ai_response}",
+                        reply_broadcast=False
+                    )
+                else:
+                    logger.info(f"Updated thinking message {thinking_message_ts} with AI response.")
+            except SlackApiError as e:
+                # Catch specific Slack API errors for better debugging
+                logger.error(f"Slack API error during chat.update: {e.response['error']} (Code: {e.response.get('response_metadata')}) for channel {channel_id}, ts {thinking_message_ts}", exc_info=True)
+                # Fallback: post a new message if update fails
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=f"⚠️ An API error occurred while updating my response. Here's what I got: {ai_response}",
+                    reply_broadcast=False
+                )
+            except Exception as e:
+                # Catch any other unexpected exceptions during chat.update
+                logger.error(f"Unexpected error during chat.update: {e}", exc_info=True)
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=f"⚠️ An unexpected error occurred while updating my response. Here's what I got: {ai_response}",
+                    reply_broadcast=False
+                )
         else:
+            # If thinking message was never posted, just post the final response
             await client.chat_postMessage(
                 channel=channel_id,
                 thread_ts=thread_ts,
@@ -119,12 +185,22 @@ async def process_app_mention_event(event: dict):
         logger.error(f"Error processing AI agent request for user {user_id}, channel {channel_id}: {e}", exc_info=True)
         error_message = f":x: Oops! I encountered an error while trying to process your request: `{e}`"
         
+        # Try to update the thinking message with an error, or post a new one
         if thinking_message_ts:
-            await client.chat_update(
-                channel=channel_id,
-                ts=thinking_message_ts,
-                text=error_message
-            )
+            try:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=thinking_message_ts,
+                    text=error_message
+                )
+            except Exception:
+                # If even updating the error fails, post a new error message
+                await client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=error_message,
+                    reply_broadcast=False
+                )
         else:
             await client.chat_postMessage(
                 channel=channel_id,
@@ -134,16 +210,16 @@ async def process_app_mention_event(event: dict):
             )
 
 # --- FastAPI Endpoint (Handles both GET and POST) ---
-@app.api_route("/", methods=["GET", "POST"]) # <--- REPAIR HERE: Allow both GET and POST
+@app.api_route("/", methods=["GET", "POST"])
 async def slack_events_root(request: Request):
     """
     Endpoint for Slack Events API and URL verification (GET and POST).
+    Consolidated logic for all Slack event handling.
     """
     
-    # --- Handle GET request for URL Verification (e.g., Slash Commands, older APIs) ---
+    # --- Handle GET request for URL Verification ---
     if request.method == "GET":
-        print(request.query_params)
-        challenge = request.query_params.get("challenge") # Get challenge from query parameters
+        challenge = request.query_params.get("challenge")
         if challenge:
             logger.info(f"Received GET URL verification challenge: {challenge}")
             return {"challenge": challenge}
@@ -152,7 +228,6 @@ async def slack_events_root(request: Request):
             raise HTTPException(status_code=400, detail="Missing challenge parameter for GET request")
 
     # --- Handle POST request (Events API, main challenge) ---
-    # Important: Get the raw body BEFORE parsing JSON for signature verification
     raw_body = await request.body()
     
     try:
@@ -173,15 +248,12 @@ async def slack_events_root(request: Request):
             logger.error("POST URL verification challenge missing 'challenge' parameter.")
             raise HTTPException(status_code=400, detail="Missing challenge parameter")
 
-
     # --- Signature verification (for POST requests that are not URL verification) ---
     if not signature_verifier.is_valid_request(raw_body.decode('utf-8'), request.headers):
         logger.warning("Signature verification failed for incoming Slack POST request.")
         raise HTTPException(status_code=403, detail="Invalid Slack signature")
 
     # --- Immediate Acknowledgment for Event Callbacks ---
-    # Crucial for Slack: return 200 OK within 3 seconds, even if processing takes longer.
-    
     if body.get("type") == "event_callback":
         event = body.get("event")
         if not event:
@@ -190,126 +262,11 @@ async def slack_events_root(request: Request):
 
         event_type = event.get("type")
         
-        if event_type == "app_mention":
+        # Handle app_mention events and direct messages to the bot
+        if event_type == "app_mention" or (event_type == "message" and event.get("channel_type") == "im"):
             asyncio.create_task(process_app_mention_event(event))
-            logger.info("App mention event scheduled for background processing.")
-        elif event_type == "message" and event.get("channel_type") == "im":
-            # Handle direct messages (DM) to the bot
-            asyncio.create_task(process_app_mention_event(event)) 
-            logger.info(f"Received DM from user {event['user']} in channel {event['channel']}. Scheduled for processing.")
+            logger.info(f"Event type '{event_type}' scheduled for background processing.")
         else:
             logger.info(f"Received unhandled event type: {event_type}. Full event: {event}")
 
-    # Acknowledge all other POST requests (e.g., interactions, commands, unhandled events)
     return {"status": "ok"}
-
-@app.api_route("/slack/events", methods=["GET", "POST"])
-async def slack_events(request: Request):
-    if request.method == "GET":
-        challenge = request.query_params.get("challenge")
-        if challenge:
-            logger.info(f"Received GET URL verification challenge: {challenge}")
-            return {"challenge": challenge}
-        else:
-            logger.error("Missing challenge parameter for GET request")
-            raise HTTPException(status_code=400, detail="Missing challenge parameter for GET request")
-
-    raw_body = await request.body()
-
-    try:
-        body = await request.json()
-    except Exception as e:
-        logger.error(f"Invalid JSON body: {e}")
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-    logger.debug(f"Received Slack POST event: {body}")
-
-    # Respond to Slack's URL verification challenge
-    if body.get("type") == "url_verification":
-        challenge_value = body.get("challenge")
-        if challenge_value:
-            return {"challenge": challenge_value}
-        else:
-            logger.error("Missing challenge parameter in URL verification")
-            raise HTTPException(status_code=400, detail="Missing challenge parameter")
-
-    # Verify Slack request signature
-    if not signature_verifier.is_valid_request(raw_body, request.headers):
-        logger.warning("Slack signature verification failed")
-        raise HTTPException(status_code=403, detail="Invalid Slack signature")
-
-    # Handle event callbacks
-    if body.get("type") == "event_callback":
-        event = body.get("event")
-        if not event:
-            logger.warning("Event callback without event payload")
-            return {"status": "ok"}
-
-        event_type = event.get("type")
-        if event_type == "app_mention":
-            incoming_text = event.get("text", "")
-            response_text = generate_response(incoming_text)
-            asyncio.create_task(process_app_mention(event, response_text))
-            logger.info("Scheduled app_mention event processing")
-        elif event_type == "message" and event.get("channel_type") == "im":
-            incoming_text = event.get("text", "")
-            response_text = generate_response(incoming_text)
-            asyncio.create_task(process_app_mention(event, response_text))
-            logger.info("Scheduled DM message event processing")
-        else:
-            logger.info(f"Unhandled event type: {event_type}")
-
-    return {"status": "ok"}
-
-async def process_app_mention(event, text: str):
-    channel = event["channel"]
-    thread_ts = event.get("thread_ts") or event.get("ts")  # thread timestamp or mention ts fallback
-
-    if isinstance(text, dict):
-        logger.error(f"Expected string but got dict: {text}")
-        text = text.get("text", str(text))
-
-    message_chunks = split_message(text)
-
-    # Post first chunk as new message in thread
-    response = await client.chat_postMessage(
-        channel=channel,
-        thread_ts=thread_ts,
-        text=message_chunks[0]
-    )
-
-    # If multiple chunks, post the rest in the same thread
-    for chunk in message_chunks[1:]:
-        await client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=chunk
-        )
-
-def split_message(text, max_length=None):
-    if max_length is None:
-        max_length = int(os.getenv("MAX_SLACK_MSG_LENGTH", "4000"))
-    elif isinstance(max_length, str):
-        max_length = int(max_length)  # <-- convert here if string
-
-    lines = text.split('\n')
-    chunks = []
-    current_chunk = ""
-
-    for line in lines:
-        if len(current_chunk) + len(line) + 1 > max_length:
-            chunks.append(current_chunk)
-            current_chunk = line
-        else:
-            current_chunk += ("\n" if current_chunk else "") + line
-
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    return chunks
-
-"""
-Example Slack Interaction:
-User: @dev-bot What's the status of sprint X?
-Bot: Sprint X has 12 tickets. 7 completed, 3 in progress, 2 blocked. Top contributors: Alice, Bob.
-"""
