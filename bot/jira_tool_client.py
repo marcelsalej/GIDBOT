@@ -15,7 +15,7 @@ class JiraTool:
         email, api_token = self.auth
         return JIRA(options, basic_auth=(email, api_token))
 
-    def fetch_jira_issues(self, jql: str, max_results: int = 50, retries: int = 3) -> List:
+    def fetch_jira_issues(self, jql: str, max_results: int = 50, retries: int = 3) -> List[dict]:
         """
         Fetch Jira issues with pagination, retry on rate limits.
 
@@ -25,9 +25,9 @@ class JiraTool:
             retries (int): Number of retries on rate limit.
 
         Returns:
-            List of Jira issues.
+            List of Jira issues (as dicts with URL).
         """
-        print(f"JQL is: {jql}")
+        import random, time  # in case these aren't already imported
         all_issues = []
         start_at = 0
 
@@ -35,12 +35,18 @@ class JiraTool:
             attempt = 0
             while attempt < retries:
                 try:
-                    issues = self.client.search_issues(jql, startAt=start_at, maxResults=max_results)
-                    break
+                    print(f"Fetching issues from {start_at} to {start_at + max_results}")
+                    issues = self.client.search_issues(
+                        jql_str=jql,
+                        startAt=start_at,
+                        maxResults=max_results,
+                        fields="summary,status,assignee,description"
+                    )
+                    break  # break retry loop on success
                 except Exception as e:
                     if "429" in str(e):
                         wait_time = 2 ** attempt + random.uniform(0, 1)
-                        print(f"Rate limit hit on Jira API. Retrying in {wait_time:.2f}s...")
+                        print(f"Rate limit hit. Retrying in {wait_time:.2f}s...")
                         time.sleep(wait_time)
                         attempt += 1
                     else:
@@ -49,16 +55,20 @@ class JiraTool:
             if attempt == retries:
                 raise Exception("Exceeded Jira API rate limit retries")
 
-            all_issues.extend(issues)
-            if len(issues) < max_results:
-                # No more issues to fetch
+            if not issues:  # 🛑 Exit loop when no more issues
                 break
+
+            for issue in issues:
+                issue_data = {
+                    "key": issue.key,
+                    "summary": issue.fields.summary,
+                    "status": issue.fields.status.name,
+                    "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "unassigned",
+                    "description": issue.fields.description,
+                    "url": f"{self.base_url}/browse/{issue.id}"
+                }
+                all_issues.append(issue_data)
+
             start_at += max_results
 
         return all_issues
-
-    def list_projects(self):
-        projects = self.client.projects()
-        print("Available Projects:")
-        for project in projects:
-            print(f"{project.key} - {project.name}")

@@ -85,12 +85,19 @@ async def process_app_mention_event(event: dict):
             reply_broadcast=False
         )
         thinking_message_ts = thinking_response["ts"]
-        logger.info(f"Posted thinking message with ts: {thinking_message_ts}")
+        logger.info(f"Posted thinking message with ts: {thinking_message_ts} and prompt {prompt}")
 
         # Ask Gemini/AI agent
 
-        ai_response = await ask_ai_agent(prompt, user_id=user_id)
-        logger.info(f"AI Agent responded to '{prompt}': {ai_response[:100]}...")
+        
+        try:
+            ai_response = await asyncio.wait_for(ask_ai_agent(prompt, user_id=user_id), timeout=60)
+        except asyncio.TimeoutError:
+            logger.error("AI agent timed out.")
+            ai_response = "⚠️ Sorry, I'm taking too long to think. Try again in a bit."
+        except Exception as e:
+            logger.exception("Error from AI agent.")
+            ai_response = f"⚠️ Oops, something went wrong: `{e}`"
 
         # Update or delete the "thinking" message and post the final response
         if thinking_message_ts:
@@ -128,7 +135,7 @@ async def process_app_mention_event(event: dict):
 
 # --- FastAPI Endpoint (Handles both GET and POST) ---
 @app.api_route("/", methods=["GET", "POST"]) # <--- REPAIR HERE: Allow both GET and POST
-async def slack_events(request: Request):
+async def slack_events_root(request: Request):
     """
     Endpoint for Slack Events API and URL verification (GET and POST).
     """
@@ -196,53 +203,6 @@ async def slack_events(request: Request):
     # Acknowledge all other POST requests (e.g., interactions, commands, unhandled events)
     return {"status": "ok"}
 
-async def process_app_mention(event, text: str):
-    channel = event["channel"]
-    thread_ts = event.get("thread_ts") or event.get("ts")  # thread timestamp or mention ts fallback
-
-    if isinstance(text, dict):
-        logger.error(f"Expected string but got dict: {text}")
-        text = text.get("text", str(text))
-
-    message_chunks = split_message(text)
-
-    # Post first chunk as new message in thread
-    response = await client.chat_postMessage(
-        channel=channel,
-        thread_ts=thread_ts,
-        text=message_chunks[0]
-    )
-
-    # If multiple chunks, post the rest in the same thread
-    for chunk in message_chunks[1:]:
-        await client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=chunk
-        )
-
-def split_message(text, max_length=None):
-    if max_length is None:
-        max_length = int(os.getenv("MAX_SLACK_MSG_LENGTH", "4000"))
-    elif isinstance(max_length, str):
-        max_length = int(max_length)  # <-- convert here if string
-
-    lines = text.split('\n')
-    chunks = []
-    current_chunk = ""
-
-    for line in lines:
-        if len(current_chunk) + len(line) + 1 > max_length:
-            chunks.append(current_chunk)
-            current_chunk = line
-        else:
-            current_chunk += ("\n" if current_chunk else "") + line
-
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    return chunks
-
 @app.api_route("/slack/events", methods=["GET", "POST"])
 async def slack_events(request: Request):
     if request.method == "GET":
@@ -289,17 +249,64 @@ async def slack_events(request: Request):
         if event_type == "app_mention":
             incoming_text = event.get("text", "")
             response_text = generate_response(incoming_text)
-            asyncio.create_task(process_app_mention_event(event))
+            asyncio.create_task(process_app_mention(event, response_text))
             logger.info("Scheduled app_mention event processing")
         elif event_type == "message" and event.get("channel_type") == "im":
             incoming_text = event.get("text", "")
             response_text = generate_response(incoming_text)
-            asyncio.create_task(process_app_mention_event(event))
+            asyncio.create_task(process_app_mention(event, response_text))
             logger.info("Scheduled DM message event processing")
         else:
             logger.info(f"Unhandled event type: {event_type}")
 
     return {"status": "ok"}
+
+async def process_app_mention(event, text: str):
+    channel = event["channel"]
+    thread_ts = event.get("thread_ts") or event.get("ts")  # thread timestamp or mention ts fallback
+
+    if isinstance(text, dict):
+        logger.error(f"Expected string but got dict: {text}")
+        text = text.get("text", str(text))
+
+    message_chunks = split_message(text)
+
+    # Post first chunk as new message in thread
+    response = await client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=message_chunks[0]
+    )
+
+    # If multiple chunks, post the rest in the same thread
+    for chunk in message_chunks[1:]:
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=chunk
+        )
+
+def split_message(text, max_length=None):
+    if max_length is None:
+        max_length = int(os.getenv("MAX_SLACK_MSG_LENGTH", "4000"))
+    elif isinstance(max_length, str):
+        max_length = int(max_length)  # <-- convert here if string
+
+    lines = text.split('\n')
+    chunks = []
+    current_chunk = ""
+
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_length:
+            chunks.append(current_chunk)
+            current_chunk = line
+        else:
+            current_chunk += ("\n" if current_chunk else "") + line
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
 
 """
 Example Slack Interaction:
