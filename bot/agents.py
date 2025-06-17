@@ -66,18 +66,26 @@ def extract_project_from_prompt(prompt: str) -> Optional[str]:
     return None
 
 def summarize_jira_issues(jira_issues: list, project_key: str) -> str:
-    filtered = [issue for issue in jira_issues if issue.get("project") == project_key]
+    # Filter issues that belong to the given project
+    filtered = [issue for issue in jira_issues if issue.fields.project.key == project_key]
     count = len(filtered)
-    blockers = [i for i in filtered if i.get("blocker", False)]
+
+    # Define how you identify blockers
+    # Example: assume "blocker" is a label
+    blockers = [i for i in filtered if 'blocker' in getattr(i.fields, 'labels', [])]
+
     summary = (
         f"Project {project_key} has {count} tickets created in last 30 days.\n"
         f"{len(blockers)} blockers reported.\n"
         "Statuses:\n"
     )
+
+    # Count statuses
     status_counts = {}
     for issue in filtered:
-        status = issue.get("status", "Unknown")
+        status = issue.fields.status.name
         status_counts[status] = status_counts.get(status, 0) + 1
+
     for status, cnt in status_counts.items():
         summary += f"- {status}: {cnt}\n"
 
@@ -90,7 +98,7 @@ async def ask_ai_agent(prompt: str, user_id: str) -> str:
     if not project_key:
         return "No project found in your question. Please specify a valid project (ID, WL, MS)."
 
-    jql_query = f'statusCategory IN ("To Do", "In Progress") ORDER BY created DESC'
+    jql_query = f'project IN ("identity team", TRIAGE) AND status IN ("IN PROGRESS")'
 
     try:
         jira_issues = jira_tool.fetch_jira_issues(jql_query)
@@ -117,7 +125,7 @@ async def ask_ai_agent(prompt: str, user_id: str) -> str:
     )
 
     full_prompt = f"{system_context}\n\n{tools_context}\n\nUser asked:\n{prompt}"
-
+    print(f"[INFO] full prompt {full_prompt}", flush=True)
     max_attempts = 3
     for attempt in range(max_attempts):
         try:

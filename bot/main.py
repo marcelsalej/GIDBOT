@@ -88,7 +88,7 @@ async def process_app_mention_event(event: dict):
         logger.info(f"Posted thinking message with ts: {thinking_message_ts}")
 
         # Ask Gemini/AI agent
-        
+
         ai_response = await ask_ai_agent(prompt, user_id=user_id)
         logger.info(f"AI Agent responded to '{prompt}': {ai_response[:100]}...")
 
@@ -196,74 +196,109 @@ async def slack_events(request: Request):
     # Acknowledge all other POST requests (e.g., interactions, commands, unhandled events)
     return {"status": "ok"}
 
+async def process_app_mention(event, text: str):
+    channel = event["channel"]
+    thread_ts = event.get("thread_ts") or event.get("ts")  # thread timestamp or mention ts fallback
 
-# --- FastAPI Endpoint (Handles both GET and POST) ---
-@app.api_route("/slack/events", methods=["GET", "POST"]) # <--- REPAIR HERE: Allow both GET and POST
+    if isinstance(text, dict):
+        logger.error(f"Expected string but got dict: {text}")
+        text = text.get("text", str(text))
+
+    message_chunks = split_message(text)
+
+    # Post first chunk as new message in thread
+    response = await client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        text=message_chunks[0]
+    )
+
+    # If multiple chunks, post the rest in the same thread
+    for chunk in message_chunks[1:]:
+        await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=chunk
+        )
+
+def split_message(text, max_length=None):
+    if max_length is None:
+        max_length = int(os.getenv("MAX_SLACK_MSG_LENGTH", "4000"))
+    elif isinstance(max_length, str):
+        max_length = int(max_length)  # <-- convert here if string
+
+    lines = text.split('\n')
+    chunks = []
+    current_chunk = ""
+
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_length:
+            chunks.append(current_chunk)
+            current_chunk = line
+        else:
+            current_chunk += ("\n" if current_chunk else "") + line
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+@app.api_route("/slack/events", methods=["GET", "POST"])
 async def slack_events(request: Request):
-    """
-    Endpoint for Slack Events API and URL verification (GET and POST).
-    """
-    
-    # --- Handle GET request for URL Verification (e.g., Slash Commands, older APIs) ---
     if request.method == "GET":
-        challenge = request.query_params.get("challenge") # Get challenge from query parameters
+        challenge = request.query_params.get("challenge")
         if challenge:
             logger.info(f"Received GET URL verification challenge: {challenge}")
             return {"challenge": challenge}
         else:
-            logger.error("GET URL verification challenge missing 'challenge' parameter.")
+            logger.error("Missing challenge parameter for GET request")
             raise HTTPException(status_code=400, detail="Missing challenge parameter for GET request")
 
-    # --- Handle POST request (Events API, main challenge) ---
-    # Important: Get the raw body BEFORE parsing JSON for signature verification
     raw_body = await request.body()
-    
+
     try:
         body = await request.json()
     except Exception as e:
-        logger.error(f"Failed to parse request body as JSON for POST request: {e}")
+        logger.error(f"Invalid JSON body: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     logger.debug(f"Received Slack POST event: {body}")
 
-    # ✅ Respond to Slack's POST challenge request (Events API)
+    # Respond to Slack's URL verification challenge
     if body.get("type") == "url_verification":
-        logger.info("Received POST URL verification challenge.")
         challenge_value = body.get("challenge")
         if challenge_value:
             return {"challenge": challenge_value}
         else:
-            logger.error("POST URL verification challenge missing 'challenge' parameter.")
+            logger.error("Missing challenge parameter in URL verification")
             raise HTTPException(status_code=400, detail="Missing challenge parameter")
 
-
-    # --- Signature verification (for POST requests that are not URL verification) ---
-    if not signature_verifier.is_valid_request(raw_body.decode('utf-8'), request.headers):
-        logger.warning("Signature verification failed for incoming Slack POST request.")
+    # Verify Slack request signature
+    if not signature_verifier.is_valid_request(raw_body, request.headers):
+        logger.warning("Slack signature verification failed")
         raise HTTPException(status_code=403, detail="Invalid Slack signature")
 
-    # --- Immediate Acknowledgment for Event Callbacks ---
-    # Crucial for Slack: return 200 OK within 3 seconds, even if processing takes longer.
-    
+    # Handle event callbacks
     if body.get("type") == "event_callback":
         event = body.get("event")
         if not event:
-            logger.warning("Event callback received without 'event' payload.")
-            return {"status": "ok"} 
+            logger.warning("Event callback without event payload")
+            return {"status": "ok"}
 
         event_type = event.get("type")
-        
         if event_type == "app_mention":
+            incoming_text = event.get("text", "")
+            response_text = generate_response(incoming_text)
             asyncio.create_task(process_app_mention_event(event))
-            logger.info("App mention event scheduled for background processing.")
+            logger.info("Scheduled app_mention event processing")
         elif event_type == "message" and event.get("channel_type") == "im":
-            # Handle direct messages (DM) to the bot
-            asyncio.create_task(process_app_mention_event(event)) 
-            logger.info(f"Received DM from user {event['user']} in channel {event['channel']}. Scheduled for processing.")
+            incoming_text = event.get("text", "")
+            response_text = generate_response(incoming_text)
+            asyncio.create_task(process_app_mention_event(event))
+            logger.info("Scheduled DM message event processing")
         else:
-            logger.info(f"Received unhandled event type: {event_type}. Full event: {event}")
+            logger.info(f"Unhandled event type: {event_type}")
 
-    # Acknowledge all other POST requests (e.g., interactions, commands, unhandled events)
     return {"status": "ok"}
 
 """
