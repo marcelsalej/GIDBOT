@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+slack_sdk
+langchain
+google-generativeai
+requests
+dotenv
+aiohttp
+jira
+atlassian-python-api
