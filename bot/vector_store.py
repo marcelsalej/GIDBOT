@@ -18,6 +18,22 @@ chroma = Chroma(
     persist_directory=".chroma"  # persists across runs
 )
 
+def _batch_add_documents(documents: list, batch_size: int = 500):
+    """
+    Adds documents to ChromaDB in smaller batches to avoid exceeding the max batch size.
+    """
+    if not documents:
+        return
+        
+    for i in range(0, len(documents), batch_size):
+        batch = documents[i:i + batch_size]
+        try:
+            chroma.add_documents(batch)
+            print(f"[DEBUG] Indexed a batch of {len(batch)} documents.")
+        except Exception as e:
+            print(f"[ERROR] Failed to index batch {i//batch_size + 1}: {e}")
+
+
 def index_jira_issues(jira_issues):
     """
     Indexes Jira issues with a two-pass approach to create parent-child links.
@@ -92,7 +108,6 @@ def index_jira_issues(jira_issues):
     if documents:
         # Clear old entries before adding new ones to prevent duplicates if run multiple times
         try:
-            # Note: This is a simple way to clear. For production, more robust ID management is better.
             collection_count = chroma.get().get('ids', [])
             if collection_count:
                 print(f"[DEBUG] Clearing {len(collection_count)} old documents from collection.")
@@ -100,7 +115,9 @@ def index_jira_issues(jira_issues):
         except Exception as e:
             print(f"[WARN] Could not clear Chroma collection. This might lead to duplicate data. Error: {e}")
 
-        chroma.add_documents(documents)
+        # --- FIX: Add documents in batches ---
+        print(f"[INFO] Starting to index {len(documents)} total documents in batches...")
+        _batch_add_documents(documents)
         print(f"[DEBUG] Finished indexing. Added {len(documents)} interlinked documents to ChromaDB.", flush=True)
     else:
         print("[DEBUG] No documents to add to ChromaDB.", flush=True)
@@ -129,7 +146,8 @@ def index_github_prs(github_prs):
         documents.append(Document(page_content=text, metadata=metadata))
     
     if documents:
-        chroma.add_documents(documents)
+        # --- FIX: Add documents in batches ---
+        _batch_add_documents(documents)
         print(f"[DEBUG] Added {len(documents)} GitHub documents to ChromaDB.", flush=True)
     else:
         print("[DEBUG] No GitHub documents to add to ChromaDB.", flush=True)
@@ -155,7 +173,8 @@ def index_confluence_pages(confluence_pages):
         documents.append(Document(page_content=text, metadata=metadata))
     
     if documents:
-        chroma.add_documents(documents)
+        # --- FIX: Add documents in batches ---
+        _batch_add_documents(documents)
         print(f"[DEBUG] Added {len(documents)} Confluence documents to ChromaDB.", flush=True)
     else:
         print("[DEBUG] No Confluence documents to add to ChromaDB.", flush=True)
