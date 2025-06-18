@@ -14,3 +14,28 @@ services:
       - CONFLUENCE_EMAIL=${CONFLUENCE_EMAIL}
       - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN}
       - MAX_SLACK_MSG_LENGTH=${MAX_SLACK_MSG_LENGTH}
+
+ # Add a dependency on ngrok if you want ngrok to start before the bot
+    # Though, typically, the bot should start first so ngrok has something to tunnel to.
+    # depends_on:
+    #   - ngrok # Uncomment if you need strict startup order, but usually not required for this setup.
+
+  ngrok:
+    image: ngrok/ngrok:latest # Use the official ngrok Docker image
+    restart: unless-stopped # Keep ngrok running
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN} # Your auth token from .env
+    command: "http bot:8004" # Tunnel HTTP traffic from ngrok to the 'bot' service on port 8000
+    ports:
+      - "4040:4040" # Expose Ngrok's web interface (for status and public URL)
+    links:
+      - bot # Link to the 'bot' service to allow communication
+    # If using custom networks, you might need to specify them:
+    # networks:
+    #   - default_network_name # Replace with your actual network name if not using default
+
+# Ensure your networks are defined if you use custom ones
+# networks:
+#   default_network_name:
+#     external: true # If using an existing network
+#   your_custom_network: # If defining a new one
