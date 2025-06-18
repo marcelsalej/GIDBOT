@@ -21,7 +21,8 @@ services:
       - RUNWAY_BASE_URL=${RUNWAY_BASE_URL:-https://api.runway.team/v1}
       - RUNWAY_ORG_ID=${RUNWAY_ORG_ID}
       - RUNWAY_APP_ID=${RUNWAY_APP_ID}
-    networks: # ADD THIS SECTION TO YOUR BOT SERVICE
+    command: uvicorn bot.main:app --host 0.0.0.0 --port 8004 # ADDED THIS LINE
+    networks:
       - gidchatbot_default # Connect the bot to the same external network
 
   ngrok:
@@ -33,7 +34,7 @@ services:
     ports:
       - "4040:4040"
     networks:
-      - gidchatbot_default # This is already correct in your snippet
+      - gidchatbot_default
 
 networks:
   gidchatbot_default:
