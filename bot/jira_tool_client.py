@@ -1,3 +1,4 @@
+# bot/jira_tool_client.py
 import os
 import time
 import random
@@ -47,7 +48,7 @@ class JiraTool:
             # As a fallback, check for 'Parent' field that links to epics in some project types
             for field in all_fields:
                  # Check if the field is named Parent and its schema suggests it can link to Epics
-                if field['name'].lower() == 'parent' and 'epic' in str(field.get('schema', {}).get('custom', '')).lower():
+                if field['name'].lower() == 'parent' and 'epic' in str(field.get('schema', {})).get('custom', '')).lower():
                     return field['id']
 
         except JIRAError as e:
@@ -87,63 +88,67 @@ class JiraTool:
         
         return None
 
-    def fetch_jira_issues(self, jql: str, max_results: int = 50, retries: int = 3) -> List[dict]:
+    def fetch_jira_issues(self, jql: str, retries: int = 3) -> List[dict]:
         """
-        Fetch Jira issues with pagination, retry on rate limits.
-        Now fetches all available fields and includes parent information.
+        Fetch all Jira issues matching a JQL query, with retry on rate limits.
+        This version relies on the jira-python library's built-in pagination.
         """
-        # ... (the outer loop and retry logic is unchanged)
-        import random, time
-        all_issues = []
-        start_at = 0
+        attempt = 0
+        issues = []
+        while attempt < retries:
+            try:
+                print(f"Fetching all issues for JQL: {jql}")
+                fields_to_fetch = "*all"
+                if self.epic_link_field_id:
+                    fields_to_fetch += f", {self.epic_link_field_id}"
+                
+                # Set maxResults to None to let the library handle pagination and fetch all issues.
+                issues = self.client.search_issues(
+                    jql_str=jql,
+                    maxResults=None,
+                    fields=fields_to_fetch
+                )
+                print(f"Successfully fetched a total of {len(issues)} issues.")
+                break  # Success, exit retry loop
+            except JIRAError as e:
+                if e.status_code == 429 or "rate limit" in str(e).lower():
+                    wait_time = 2 ** attempt + random.uniform(0, 1)
+                    print(f"Rate limit hit. Retrying in {wait_time:.2f}s...")
+                    time.sleep(wait_time)
+                    attempt += 1
+                else:
+                    print(f"A Jira API error occurred: {e.text}")
+                    raise
+            except Exception as e:
+                # Catch other potential exceptions that might indicate a rate limit
+                if "429" in str(e):
+                    wait_time = 2 ** attempt + random.uniform(0, 1)
+                    print(f"Rate limit hit. Retrying in {wait_time:.2f}s...")
+                    time.sleep(wait_time)
+                    attempt += 1
+                else:
+                    print(f"An unexpected error occurred during Jira fetch: {e}")
+                    raise
 
-        while True:
-            attempt = 0
-            while attempt < retries:
-                try:
-                    print(f"Fetching issues from {start_at} to {start_at + max_results}")
-                    # Dynamically add the epic link field to the list of fields to fetch
-                    fields_to_fetch = "*all"
-                    if self.epic_link_field_id:
-                        fields_to_fetch += f", {self.epic_link_field_id}"
-                    
-                    issues = self.client.search_issues(
-                        jql_str=jql,
-                        startAt=start_at,
-                        maxResults=max_results,
-                        fields=fields_to_fetch
-                    )
-                    break
-                except Exception as e:
-                    # ... (error handling is unchanged)
-                    if "429" in str(e):
-                        wait_time = 2 ** attempt + random.uniform(0, 1)
-                        print(f"Rate limit hit. Retrying in {wait_time:.2f}s...")
-                        time.sleep(wait_time)
-                        attempt += 1
-                    else:
-                        raise
+        if attempt == retries:
+            raise Exception("Exceeded Jira API rate limit retries")
 
-            if attempt == retries:
-                raise Exception("Exceeded Jira API rate limit retries")
+        all_issues_data = []
+        if not issues:
+            return all_issues_data
 
-            if not issues:
-                break
+        for issue in issues:
+            issue_data = {
+                "key": issue.key,
+                "summary": issue.fields.summary,
+                "status": issue.fields.status.name,
+                "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "unassigned",
+                "description": issue.fields.description,
+                "url": f"{self.base_url}/browse/{issue.key}",
+                "updated": issue.fields.updated,
+                "parent": self._get_parent_info(issue),
+                "raw_data": issue.raw
+            }
+            all_issues_data.append(issue_data)
 
-            for issue in issues:
-                issue_data = {
-                    "key": issue.key,
-                    "summary": issue.fields.summary,
-                    "status": issue.fields.status.name,
-                    "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "unassigned",
-                    "description": issue.fields.description,
-                    "url": f"{self.base_url}/browse/{issue.key}",
-                    "updated": issue.fields.updated,
-                    "parent": self._get_parent_info(issue),
-                    "raw_data": issue.raw
-                }
-                all_issues.append(issue_data)
-
-            start_at += max_results
-
-        return all_issues
+        return all_issues_data
