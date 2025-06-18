@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir git+https://github.com/hwchase17/langchain.git@ma
 COPY . .
 
 # Expose port (adjust as needed)
-EXPOSE 8000
+EXPOSE 8004
 
 # Run your app (adjust as needed)
-CMD ["uvicorn", "bot.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "bot.main:app", "--host", "127.0.0.1", "--port", "8004"]
