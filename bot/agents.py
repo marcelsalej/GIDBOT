@@ -34,10 +34,7 @@ memory.chat_memory.add_message(SystemMessage(
     content="You are a helpful assistant for a software development team. \n"
     "You summarize Jira ticket statuses and match Confluence docs to JIRA issues. \n"
     "You expose any blockers that are reported in Jira.\n"
-    "When requested, you retrieve all Jira tickets for the following:\n"
-    "- Identity team: Project name = ID\n"
-    "- Wallet team: Project name = WL\n"
-    "- Messaging team: Project name = MS"
+    "When requested, you retrieve all Jira tickets for the specified project."
 ))
 
 # You can also add tool context directly, or let the agent handle tool descriptions
@@ -71,12 +68,14 @@ agent = initialize_agent(
     # agent_kwargs={"system_message": system_context} # This could also be an option for different agent types
 )
 
-# Valid project keys
-PROJECT_KEYS = ["ID", "WL", "MS"]
+# --- FIX ---
+# Updated list of all valid project keys from main.py
+PROJECT_KEYS = ["TRIAGE", "ID", "WL", "MS", "GDP", "DO", "ARCH", "CT"]
 
 
 def extract_project_from_prompt(prompt: str) -> Optional[str]:
     prompt_lower = prompt.lower()
+    # Check for the presence of any of the project keys in the prompt
     for proj in PROJECT_KEYS:
         if proj.lower() in prompt_lower:
             return proj
@@ -136,28 +135,20 @@ async def ask_ai_agent(prompt: str, user_id: str) -> str:
     print(f"[DEBUG] AI agent warming up for project: {project_key}", flush=True)
 
     if not project_key:
-        return "No project found in your question. Please specify a valid project (ID, WL, MS)."
+        # --- FIX --- Updated error message to show all valid projects
+        return f"No project found in your question. Please specify a valid project ({', '.join(PROJECT_KEYS)})."
 
-    # Adjust JQL query based on the detected project_key for targeted fetching
-    # The original JQL was 'project IN ("identity team", TRIAGE)'
-    # We should refine this based on the extracted project_key for relevance.
-    # For a general overview, it might still fetch broadly, but the summary will filter.
-    # Let's assume the JQL needs to be dynamic for the project.
-    # Mapping project keys to full project names for JQL
-    project_name_map = {
-        "ID": "identity team",
-        "WL": "wallet team",
-        "MS": "messaging team"
-    }
-    jql_project_name = project_name_map.get(project_key, "identity team") # Default to identity team if not found
-
-    # Fetching issues for the specific project identified
-    jql_query = f'project = "{jql_project_name}"' # Adjusted JQL to be specific
+    # --- FIX --- 
+    # Removed the project_name_map and now we use the project key directly in the JQL.
+    # This is more robust and aligns with how projects are identified in the main.py JQL.
+    jql_query = f'project = "{project_key}"'
     print(f"Fetching Jira issues with JQL: {jql_query}", flush=True)
 
     try:
-        jira_issues = jira_tool.fetch_jira_issues(jql_query)
-        print(f"[DEBUG] Retrieved {len(jira_issues)} issues from Jira for {jql_project_name}", flush=True)
+        # The jira_tool.fetch_jira_issues now correctly fetches all issues due to the previous fix.
+        # This call no longer requires the max_results parameter.
+        jira_issues = jira_tool.fetch_jira_issues(jql_query) 
+        print(f"[DEBUG] Retrieved {len(jira_issues)} issues from Jira for {project_key}", flush=True)
         jira_summary = summarize_jira_issues(jira_issues, project_key)
     except Exception as e:
         print(f"[ERROR] Jira fetch failed: {repr(e)}", flush=True)
