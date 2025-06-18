@@ -1,3 +1,5 @@
+# docker-compose.yml
+
 services:
   bot:
     build: .
@@ -14,28 +16,25 @@ services:
       - CONFLUENCE_EMAIL=${CONFLUENCE_EMAIL}
       - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN}
       - MAX_SLACK_MSG_LENGTH=${MAX_SLACK_MSG_LENGTH}
-
- # Add a dependency on ngrok if you want ngrok to start before the bot
-    # Though, typically, the bot should start first so ngrok has something to tunnel to.
-    # depends_on:
-    #   - ngrok # Uncomment if you need strict startup order, but usually not required for this setup.
+      # Make sure to include these environment variables if they are used by your bot
+      - RUNWAY_API_KEY=${RUNWAY_API_KEY}
+      - RUNWAY_BASE_URL=${RUNWAY_BASE_URL:-https://api.runway.team/v1}
+      - RUNWAY_ORG_ID=${RUNWAY_ORG_ID}
+      - RUNWAY_APP_ID=${RUNWAY_APP_ID}
+    networks: # ADD THIS SECTION TO YOUR BOT SERVICE
+      - gidchatbot_default # Connect the bot to the same external network
 
   ngrok:
-    image: ngrok/ngrok:latest # Use the official ngrok Docker image
-    restart: unless-stopped # Keep ngrok running
+    image: ngrok/ngrok:latest
+    restart: unless-stopped
     environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN} # Your auth token from .env
-    command: "http bot:8004" # Tunnel HTTP traffic from ngrok to the 'bot' service on port 8004
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    command: "http bot:8004"
     ports:
-      - "4040:4040" # Expose Ngrok's web interface (for status and public URL)
-    links:
-      - bot # Link to the 'bot' service to allow communication
-    # If using custom networks, you might need to specify them:
-    # networks:
-    #   - default_network_name # Replace with your actual network name if not using default
+      - "4040:4040"
+    networks:
+      - gidchatbot_default # This is already correct in your snippet
 
-# Ensure your networks are defined if you use custom ones
-# networks:
-#   default_network_name:
-#     external: true # If using an existing network
-#   your_custom_network: # If defining a new one
+networks:
+  gidchatbot_default:
+    external: true # This is correct for an existing network
