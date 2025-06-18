@@ -30,6 +30,7 @@ def index_jira_issues(jira_issues):
         updated = issue["updated"]
         description = issue["description"]
         url = issue["url"]
+        raw_data = issue["raw_data"]
         desc = description[:500] if description else ""
     
         
@@ -40,6 +41,7 @@ def index_jira_issues(jira_issues):
             f"Status: {status}\n"
             f"Updated: {updated}\n"
             f"Assignee: {assignee}\n"
+            f"Raw data: {raw_data}\n"
             f"Description: {desc}..." # Truncate long descriptions
         )
         
@@ -49,7 +51,9 @@ def index_jira_issues(jira_issues):
             "status": status,
             "updated": updated,
             "assignee": assignee,
-            "url": url
+            "url": url,
+            "desc": desc,
+            "raw_data": raw_data
         }
         documents.append(Document(page_content=text, metadata=metadata))
 
