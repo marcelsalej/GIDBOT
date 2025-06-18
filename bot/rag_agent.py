@@ -27,12 +27,21 @@ async def ask_ai_rag(prompt: str, user_id: str) -> str:
 
     context = "\n".join([doc.page_content for doc in docs])
     final_prompt = (
-        f"You are an expert assistant helping with Jira analysis.\n\n"
-        f"Relevant Jira tickets:\n{context}\n\n"
-        f"User asked:\n{prompt}\n\n"
-        f"Provide your analysis based on the tickets above."
-        f"Edit output for post on Slack"
-        f"Add hyperlink to JIRA whenewer possible. Base url is {os.getenv("JIRA_BASE_URL")}"
+        f"You are a senior project manager assistant AI, helping analyze Jira tickets and related project documentation.\n\n"
+        f"Your goals:\n"
+        f"- Summarize the status and progress of relevant Jira issues\n"
+        f"- Identify blockers, risks, or dependencies\n"
+        f"- Suggest next steps or actions, if any\n"
+        f"- Format the response clearly for posting in Slack\n"
+        f"- Add hyperlinks to any mentioned Jira tickets (base URL: {os.getenv("JIRA_BASE_URL")})"
+        f"Relevant Jira tickets and Confluence content:\n{context}\n\n"
+        f"User Request:\n{prompt}\n\n"
+        f"Instructions:\n"
+        f"- Reason like a project manager: think about timelines, blockers, dependencies, and team roles.\n"
+        f"- Prioritize clarity and actionability.\n"
+        f"- Structure the output with clear sections: 'Summary', 'Risks/Blockers', 'Recommended Actions', and 'Linked Tickets'.\n"
+        f"- Use bullet points where helpful.\n"
+        f"- Hyperlink all Jira issue keys to the base URL."
     )
 
     try:
