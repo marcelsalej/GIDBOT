@@ -11,7 +11,6 @@ class JiraTool:
         self.auth = (os.getenv("JIRA_EMAIL"), os.getenv("JIRA_API_TOKEN"))
         self.client = self.create_jira_client()
         
-        # --- NEW: Automatically discover the Epic Link field ID ---
         self.epic_link_field_id = self._find_epic_link_field_id()
         if self.epic_link_field_id:
             print(f"[INFO] Successfully discovered Jira Epic Link Field ID: {self.epic_link_field_id}")
@@ -29,7 +28,6 @@ class JiraTool:
         This avoids needing admin permissions to find the ID manually.
         """
         try:
-            # First, check if the ID was provided in the environment as an override
             env_id = os.getenv("JIRA_EPIC_LINK_FIELD_ID")
             if env_id:
                 print(f"[INFO] Using JIRA_EPIC_LINK_FIELD_ID from environment: {env_id}")
@@ -38,17 +36,12 @@ class JiraTool:
             print("[INFO] JIRA_EPIC_LINK_FIELD_ID not set. Attempting to discover it automatically...")
             all_fields = self.client.fields()
             
-            # Search for the field by its common names.
-            # "Epic Link" is for company-managed projects.
-            # "Parent" is sometimes used for epics in team-managed projects.
             for field in all_fields:
                 if field['name'].lower() == 'epic link':
                     return field['id']
             
-            # As a fallback, check for 'Parent' field that links to epics in some project types
             for field in all_fields:
-                 # Check if the field is named Parent and its schema suggests it can link to Epics
-                if field['name'].lower() == 'parent' and 'epic' in str(field.get('schema', {})).get('custom', '')).lower():
+                if field['name'].lower() == 'parent' and 'epic' in str(field.get('schema', {}).get('custom', '')).lower():
                     return field['id']
 
         except JIRAError as e:
@@ -56,23 +49,19 @@ class JiraTool:
         except Exception as e:
             print(f"[ERROR] An unexpected error occurred during field discovery: {e}")
             
-        return None # Return None if not found
+        return None
 
     def _get_parent_info(self, issue: Any) -> Optional[Dict[str, str]]:
         """
         Extracts parent information for sub-tasks or issues linked to an epic.
         """
         parent_issue = None
-        # Case 1: Issue is a sub-task (standard parent field)
         if hasattr(issue.fields, 'parent'):
             parent_issue = issue.fields.parent
-
-        # Case 2: Issue is linked to an Epic (using discovered custom field)
         elif self.epic_link_field_id and hasattr(issue.fields, self.epic_link_field_id):
             epic_key = getattr(issue.fields, self.epic_link_field_id)
             if epic_key:
                 try:
-                    # Perform an API call to get full epic details. This is more robust.
                     parent_issue = self.client.issue(epic_key)
                 except JIRAError as e:
                     print(f"[WARN] Could not fetch details for Epic {epic_key}: {e.text}")
@@ -88,67 +77,68 @@ class JiraTool:
         
         return None
 
-    def fetch_jira_issues(self, jql: str, retries: int = 3) -> List[dict]:
+    def fetch_jira_issues_by_project(self, project_keys: List[str], retries: int = 3) -> List[dict]:
         """
-        Fetch all Jira issues matching a JQL query, with retry on rate limits.
-        This version relies on the jira-python library's built-in pagination.
+        Fetch all Jira issues for a list of projects, handling pagination and retries for each.
+        This is more robust against single large query limits.
         """
-        attempt = 0
-        issues = []
-        while attempt < retries:
-            try:
-                print(f"Fetching all issues for JQL: {jql}")
-                fields_to_fetch = "*all"
-                if self.epic_link_field_id:
-                    fields_to_fetch += f", {self.epic_link_field_id}"
-                
-                # Set maxResults to None to let the library handle pagination and fetch all issues.
-                issues = self.client.search_issues(
-                    jql_str=jql,
-                    maxResults=None,
-                    fields=fields_to_fetch
-                )
-                print(f"Successfully fetched a total of {len(issues)} issues.")
-                break  # Success, exit retry loop
-            except JIRAError as e:
-                if e.status_code == 429 or "rate limit" in str(e).lower():
-                    wait_time = 2 ** attempt + random.uniform(0, 1)
-                    print(f"Rate limit hit. Retrying in {wait_time:.2f}s...")
-                    time.sleep(wait_time)
-                    attempt += 1
-                else:
-                    print(f"A Jira API error occurred: {e.text}")
-                    raise
-            except Exception as e:
-                # Catch other potential exceptions that might indicate a rate limit
-                if "429" in str(e):
-                    wait_time = 2 ** attempt + random.uniform(0, 1)
-                    print(f"Rate limit hit. Retrying in {wait_time:.2f}s...")
-                    time.sleep(wait_time)
-                    attempt += 1
-                else:
-                    print(f"An unexpected error occurred during Jira fetch: {e}")
-                    raise
+        all_project_issues = []
+        
+        for project_key in project_keys:
+            print(f"--- Starting fetch for project: {project_key} ---")
+            jql = f'project = "{project_key}" ORDER BY created DESC'
+            
+            attempt = 0
+            while attempt < retries:
+                try:
+                    print(f"Attempting to fetch all issues for project {project_key}...")
+                    
+                    fields_to_fetch = "*all"
+                    if self.epic_link_field_id:
+                        fields_to_fetch += f", {self.epic_link_field_id}"
 
-        if attempt == retries:
-            raise Exception("Exceeded Jira API rate limit retries")
+                    # Let the library handle pagination for this single project query
+                    issues = self.client.search_issues(
+                        jql_str=jql,
+                        maxResults=None, 
+                        fields=fields_to_fetch
+                    )
+                    
+                    print(f"Successfully fetched {len(issues)} issues for project {project_key}.")
+                    
+                    # Process and add issues to the main list
+                    for issue in issues:
+                        issue_data = {
+                            "key": issue.key,
+                            "summary": issue.fields.summary,
+                            "status": issue.fields.status.name,
+                            "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "unassigned",
+                            "description": issue.fields.description,
+                            "url": f"{self.base_url}/browse/{issue.key}",
+                            "updated": issue.fields.updated,
+                            "parent": self._get_parent_info(issue),
+                            "raw_data": issue.raw
+                        }
+                        all_project_issues.append(issue_data)
+                    
+                    break  # Success for this project, move to the next one
 
-        all_issues_data = []
-        if not issues:
-            return all_issues_data
+                except JIRAError as e:
+                    if e.status_code == 429 or "rate limit" in str(e).lower():
+                        wait_time = 2 ** attempt + random.uniform(0, 1)
+                        print(f"Rate limit hit on project {project_key}. Retrying in {wait_time:.2f}s...")
+                        time.sleep(wait_time)
+                        attempt += 1
+                    else:
+                        print(f"A Jira API error occurred on project {project_key}: {e.text}")
+                        # Break the retry loop for this project and move to the next
+                        break 
+                except Exception as e:
+                    print(f"An unexpected error occurred on project {project_key}: {e}")
+                    # Break the retry loop for this project and move to the next
+                    break
 
-        for issue in issues:
-            issue_data = {
-                "key": issue.key,
-                "summary": issue.fields.summary,
-                "status": issue.fields.status.name,
-                "assignee": issue.fields.assignee.displayName if issue.fields.assignee else "unassigned",
-                "description": issue.fields.description,
-                "url": f"{self.base_url}/browse/{issue.key}",
-                "updated": issue.fields.updated,
-                "parent": self._get_parent_info(issue),
-                "raw_data": issue.raw
-            }
-            all_issues_data.append(issue_data)
+            if attempt == retries:
+                print(f"Exceeded max retries for project {project_key}. Skipping.")
 
-        return all_issues_data
+        return all_project_issues
