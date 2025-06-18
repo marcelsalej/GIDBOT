@@ -15,7 +15,7 @@ class JiraTool:
         email, api_token = self.auth
         return JIRA(options, basic_auth=(email, api_token))
 
-    def fetch_jira_issues(self, jql: str, max_results: int = 50, retries: int = 3) -> List[dict]:
+    def fetch_jira_issues(self, jql: str, max_results: int = 150, retries: int = 3) -> List[dict]:
         """
         Fetch Jira issues with pagination, retry on rate limits.
         Now fetches all available fields.

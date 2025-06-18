@@ -71,8 +71,8 @@ async def startup_event():
     # --- Jira Preloading ---
     try:
         jira_tool_instance = JiraTool()
-        jql_query = 'project IN ("TRIAGE", "ID", "WL", "MS", "GlobaliD discovery project", "DevOps")'
-        logger.info("[STARTUP] Fetching Jira issues for preloading...")
+        jql_query = 'project IN ("TRIAGE", "ID", "WL", "MS", "GDP", "DO", "ARCH", "CT") ORDER BY created DESC'
+        logger.info("[STARTUP] Fetching Jira issues for preloading...  {jql_query}", flush=True)
         jira_issues = jira_tool_instance.fetch_jira_issues(jql_query)
         logger.info(f"[STARTUP] Indexing {len(jira_issues)} Jira issues...")
         index_jira_issues(jira_issues)
