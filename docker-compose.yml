@@ -34,7 +34,3 @@ services:
       - "4040:4040"
     networks:
       - gidchatbot_default # This is already correct in your snippet
-
-networks:
-  gidchatbot_default:
-    external: true # This is correct for an existing network
