@@ -29,7 +29,7 @@ services:
     restart: unless-stopped
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
-    command: "http 127.0.0.1:8004"
+    command: "http bot.main:8004"
     ports:
       - "4040:4040"
     networks:
