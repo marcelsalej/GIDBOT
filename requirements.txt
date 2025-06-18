@@ -11,3 +11,5 @@ langchain>=0.0.272
 langchain-google-genai
 langchain-community
 chromadb
+PyGithub
+beautifulsoup4

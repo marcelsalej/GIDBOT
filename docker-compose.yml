@@ -15,12 +15,15 @@ services:
       - CONFLUENCE_BASE_URL=${CONFLUENCE_BASE_URL}
       - CONFLUENCE_EMAIL=${CONFLUENCE_EMAIL}
       - CONFLUENCE_API_TOKEN=${CONFLUENCE_API_TOKEN}
+      - CONFLUENCE_SPACE_KEY=${CONFLUENCE_SPACE_KEY}
       - MAX_SLACK_MSG_LENGTH=${MAX_SLACK_MSG_LENGTH}
       # Make sure to include these environment variables if they are used by your bot
       - RUNWAY_API_KEY=${RUNWAY_API_KEY}
       - RUNWAY_BASE_URL=${RUNWAY_BASE_URL:-https://api.runway.team/v1}
       - RUNWAY_ORG_ID=${RUNWAY_ORG_ID}
       - RUNWAY_APP_ID=${RUNWAY_APP_ID}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}               
+      - GITHUB_REPO_NAME=${GITHUB_REPO_NAME} 
     command: uvicorn bot.main:app --host 0.0.0.0 --port 8004
     networks:
       - gidchatbot_default

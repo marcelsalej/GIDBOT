@@ -17,7 +17,13 @@ from slack_sdk.errors import SlackApiError # Import SlackApiError for specific e
 
 # New imports for Jira preloading
 from bot.jira_tool_client import JiraTool
-from bot.vector_store import index_jira_issues
+from bot.vector_store import index_jira_issues, index_github_prs, index_confluence_pages
+
+# New imports for GitHub
+from bot.github_tool_client import GithubTool
+
+from bot.confluence_tool import ConfluenceTool
+
 
 # Use bot.rag_agent for RAG capabilities as it's currently aliased and used.
 from bot.rag_agent import ask_ai_rag as ask_ai_agent
@@ -73,6 +79,36 @@ async def startup_event():
         logger.info("[STARTUP] Jira issues preloaded and indexed successfully.")
     except Exception as e:
         logger.error(f"[STARTUP] Failed to preload/index Jira issues: {e}", exc_info=True)
+
+          # --- GitHub Preloading ---
+    try:
+        github_repo = os.getenv("GITHUB_REPO_NAME")
+        if github_repo:
+            github_tool_instance = GithubTool()
+            logger.info(f"[STARTUP] Fetching GitHub PRs from {github_repo} for preloading...")
+            github_prs = github_tool_instance.fetch_github_prs(github_repo)
+            logger.info(f"[STARTUP] Indexing {len(github_prs)} GitHub PRs...")
+            index_github_prs(github_prs)
+            logger.info("[STARTUP] GitHub PRs preloaded and indexed successfully.")
+        else:
+            logger.warning("[STARTUP] GITHUB_REPO_NAME not set. Skipping GitHub preloading.")
+    except Exception as e:
+        logger.error(f"[STARTUP] Failed to preload/index GitHub PRs: {e}", exc_info=True)
+
+         # --- Confluence Preloading ---
+    try:
+        confluence_space = os.getenv("CONFLUENCE_SPACE_KEY")
+        if confluence_space:
+            confluence_tool_instance = ConfluenceTool()
+            logger.info(f"[STARTUP] Fetching Confluence pages from space '{confluence_space}' for preloading...")
+            confluence_pages = confluence_tool_instance.fetch_confluence_pages(confluence_space)
+            logger.info(f"[STARTUP] Indexing {len(confluence_pages)} Confluence pages...")
+            index_confluence_pages(confluence_pages)
+            logger.info("[STARTUP] Confluence pages preloaded and indexed successfully.")
+        else:
+            logger.warning("[STARTUP] CONFLUENCE_SPACE_KEY not set. Skipping Confluence preloading.")
+    except Exception as e:
+        logger.error(f"[STARTUP] Failed to preload/index Confluence pages: {e}", exc_info=True)
 
 # --- Helper Function for Background Processing ---
 async def process_app_mention_event(event: dict):
