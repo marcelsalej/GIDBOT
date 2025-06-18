@@ -33,7 +33,7 @@ class JiraTool:
                 print(f"[INFO] Using JIRA_EPIC_LINK_FIELD_ID from environment: {env_id}")
                 return env_id
 
-            print("[INFO] JIRA_EPIC_LINK_FIELD_ID not set. Attempting to discover it automatically...")
+            print("[INFO] JIRA_EPIC_LINK_FIELD_ID not set. Attempting to discover it automatically...", flush=True)
             all_fields = self.client.fields()
             
             for field in all_fields:

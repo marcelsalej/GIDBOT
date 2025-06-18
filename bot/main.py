@@ -73,7 +73,7 @@ async def startup_event():
         jira_tool_instance = JiraTool()
         # --- FIX: Define projects as a list to be queried individually ---
         project_keys_to_load = ["TRIAGE", "ID", "WL", "MS", "GDP", "DO", "ARCH", "CT"]
-        logger.info(f"[STARTUP] Fetching Jira issues for projects: {project_keys_to_load}")
+        logger.info(f"[STARTUP] Fetching Jira issues for projects: {project_keys_to_load}", flush=True)
         jira_issues = jira_tool_instance.fetch_jira_issues_by_project(project_keys_to_load)
         logger.info(f"[STARTUP] Indexing {len(jira_issues)} Jira issues...")
         index_jira_issues(jira_issues)
