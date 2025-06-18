@@ -91,7 +91,7 @@ class JiraTool:
             attempt = 0
             while attempt < retries:
                 try:
-                    print(f"Attempting to fetch all issues for project {project_key}...")
+                    print(f"Attempting to fetch all issues for project {project_key}...", flush=True)
                     
                     fields_to_fetch = "*all"
                     if self.epic_link_field_id:
@@ -104,7 +104,7 @@ class JiraTool:
                         fields=fields_to_fetch
                     )
                     
-                    print(f"Successfully fetched {len(issues)} issues for project {project_key}.")
+                    print(f"Successfully fetched {len(issues)} issues for project {project_key}.", flush=True)
                     
                     # Process and add issues to the main list
                     for issue in issues:
@@ -140,5 +140,5 @@ class JiraTool:
 
             if attempt == retries:
                 print(f"Exceeded max retries for project {project_key}. Skipping.")
-
+        print(f"Successfully fetched all {len(all_project_issues)} issues.", flush=True)
         return all_project_issues
