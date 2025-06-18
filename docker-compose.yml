@@ -25,7 +25,7 @@ services:
     restart: unless-stopped # Keep ngrok running
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN} # Your auth token from .env
-    command: "http bot:8004" # Tunnel HTTP traffic from ngrok to the 'bot' service on port 8000
+    command: "http bot:8004" # Tunnel HTTP traffic from ngrok to the 'bot' service on port 8004
     ports:
       - "4040:4040" # Expose Ngrok's web interface (for status and public URL)
     links:
