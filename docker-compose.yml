@@ -2,7 +2,7 @@ services:
   bot:
     build: .
     ports:
-      - "8000:8000"
+      - "8004:8004"
     environment:
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
       - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
